@@ -1,4 +1,4 @@
 Flask
-pdfplumber
+tabula-py
 pandas
-openpyxl
+JPype1  # tabula-py dependency
