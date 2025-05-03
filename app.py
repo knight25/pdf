@@ -1,44 +1,52 @@
-from flask import Flask, render_template, request, send_file
-import pdfplumber
+from flask import Flask, request, send_file
+import tabula
 import pandas as pd
 import os
-import uuid
 
 app = Flask(__name__)
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+UPLOAD_FOLDER = 'uploads'
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return open('index.html').read()
 
 @app.route('/convert', methods=['POST'])
-def convert():
-    file = request.files['pdf']
-    if file.filename.endswith('.pdf'):
-        pdf_path = os.path.join(UPLOAD_FOLDER, file.filename)
-        file.save(pdf_path)
+def convert_pdf():
+    if 'pdf_file' not in request.files:
+        return 'No file part', 400
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return 'No selected file', 400
+    if file and allowed_file(file.filename):
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+        file.save(filepath)
+        try:
+            # Attempt to read all tables from the PDF
+            list_of_dfs = tabula.read_pdf(filepath, pages='all', multiple_tables=True)
 
-        # Extract table from PDF using pdfplumber
-        data = []
-        with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                tables = page.extract_tables()
-                for table in tables:
-                    data.extend(table)
+            if not list_of_dfs:
+                os.remove(filepath)
+                return 'No tables found in the PDF.', 400
 
-        if not data:
-            return "No table data found in PDF.", 400
+            # Concatenate all extracted DataFrames into one
+            combined_df = pd.concat(list_of_dfs, ignore_index=True)
 
-        # Convert to DataFrame and save to Excel
-        df = pd.DataFrame(data)
-        excel_filename = f"{uuid.uuid4().hex}.xlsx"
-        excel_path = os.path.join(UPLOAD_FOLDER, excel_filename)
-        df.to_excel(excel_path, index=False, header=False)
+            # Convert the DataFrame to CSV format
+            csv_data = combined_df.to_csv(index=False)
 
-        return send_file(excel_path, as_attachment=True)
+            os.remove(filepath)
+            return csv_data
+        except Exception as e:
+            os.remove(filepath)
+            return f'Error during PDF processing: {str(e)}', 500
+    return 'Invalid file format', 400
 
-    return "Invalid file type. Please upload a PDF file.", 400
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() == 'pdf'
 
 if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=10000)
+    app.run(debug=True)
